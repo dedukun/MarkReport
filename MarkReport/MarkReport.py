@@ -2,29 +2,34 @@
 
 # Command line flags
 
+import os
+import glob
+import re
+import pyinotify
+import subprocess
+from sys import stdout, stderr
+from time import time, sleep
+from tempfile import gettempdir
+from distutils.dir_util import copy_tree
+from shutil import copyfile
+from weasyprint import HTML
 import argparse
 
-parser = argparse.ArgumentParser(description='Converts Markdown to elegant PDF reports')
+parser = argparse.ArgumentParser(
+    description='Converts Markdown to elegant PDF reports')
 parser.add_argument('--basic', dest='basic', action='store_true',
-    help='Do not enrich HTML with LaTeX and syntax highlighting (faster builds)')
+                    help='Do not enrich HTML with LaTeX and syntax highlighting (faster builds)')
 parser.add_argument('--watch', dest='watch', action='store_true',
-    help='Watch the current folder for changes and rebuild automatically')
+                    help='Watch the current folder for changes and rebuild automatically')
 parser.add_argument('--quiet', dest='quiet', action='store_true',
-    help='Do not output any information')
+                    help='Do not output any information')
 parser.add_argument("--timeout", type=int, default=2,
-    help='Page generation timeout')
+                    help='Page generation timeout')
+parser.add_argument("--base-html", type=str, default="",
+                    help='The path to the base HTML file')
 parser.set_defaults(watch=False)
 args = parser.parse_args()
 
-from weasyprint import HTML
-
-from shutil import copyfile
-from distutils.dir_util import copy_tree
-from tempfile import gettempdir
-from time import time, sleep
-from sys import stdout, stderr
-import subprocess
-import re, glob, os
 
 # Check directory
 
@@ -36,6 +41,11 @@ for file in os.listdir("."):
 if not ok:
     stderr.write("No markdown file found in the current folder")
     exit(1)
+
+if args.base_html != "":
+    if not os.path.isfile(args.base_html):
+        stderr.write("The given base HTML file doesn't exist")
+        exit(1)
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -57,12 +67,14 @@ if not args.basic:
     options.log.level = "trace"
 
     d = DesiredCapabilities.FIREFOX
-    d['loggingPrefs'] = { 'browser':'ALL' }
+    d['loggingPrefs'] = {'browser': 'ALL'}
 
-    driver = webdriver.Firefox(options=options,capabilities=d)
+    driver = webdriver.Firefox(options=options, capabilities=d)
     driver.set_page_load_timeout(args.timeout)
 
 prev_compile_time = 0
+
+
 def recompile(notifier):
     if notifier is not None and (notifier.maskname != "IN_MODIFY" or notifier.pathname.endswith(".pdf")):
         return
@@ -79,20 +91,18 @@ def recompile(notifier):
     for f in files:
         os.remove(f)
 
-    copyfile(script_path + "/base.html", tmp_dir + "/base.html")
+    if args.base_html == "":
+        copyfile(script_path + "/base.html", tmp_dir + "/base.html")
+    else:
+        copyfile(args.base_html, tmp_dir + "/base.html")
     if not os.path.islink(tmp_dir + "/src"):
         os.symlink(script_path + "/src", tmp_dir + "/src")
     copy_tree(".", tmp_dir)
 
-    # Base HTML Template
-
-    base_html = ""
-    with open(tmp_dir + "base.html", "r") as base_html_file:
-        base_html = base_html_file.read()
-
     # Markdown parsing
 
-    subprocess.check_output(script_path + "/md-parsing " + tmp_dir, shell=True)
+    subprocess.check_output(script_path + "/md-parsing " +
+                            tmp_dir, shell=True).decode('utf-8')
     html_file_name = tmp_dir + "output.html"
 
     # Interpret JS code
@@ -109,12 +119,13 @@ def recompile(notifier):
     # Create final PDF file
 
     pdf = HTML(html_file_name).write_pdf()
-    f = open("output.pdf",'wb')
+    f = open("output.pdf", 'wb')
     f.write(pdf)
 
     if not args.quiet:
         stdout.write("\rDone.                   ")
         stdout.flush()
+
 
 recompile(None)
 
@@ -123,8 +134,6 @@ if not args.watch:
         driver.quit()
     exit(0)
 
-import pyinotify
-
 watch_manager = pyinotify.WatchManager()
 event_notifier = pyinotify.Notifier(watch_manager, recompile)
 
@@ -132,4 +141,4 @@ watch_manager.add_watch(os.path.abspath("."), pyinotify.ALL_EVENTS, rec=True)
 event_notifier.loop()
 
 if not args.basic:
-        driver.quit()
+    driver.quit()

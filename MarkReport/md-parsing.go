@@ -1,8 +1,8 @@
 package main
 
 import (
-	"time"
 	"bufio"
+	"fmt"
 	"html"
 	"io/ioutil"
 	"os"
@@ -11,16 +11,18 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	blackfriday "gopkg.in/russross/blackfriday.v2"
 )
 
 // Data ...
 type Data struct {
-	Title    string
-	Subtitle string
-	Cover    string
-	Header   bool
+	Title         string
+	Subtitle      string
+	Cover         string
+	Header        bool
+	LimitTocLevel bool
 }
 
 // TOCEntry ...
@@ -95,7 +97,7 @@ func getMarkdownContent(dir string) []byte {
 
 	mdContent := ""
 	for _, f := range mdFilesPicked {
-		if (f == ".md") {
+		if f == ".md" {
 			continue
 		}
 		c, err := ioutil.ReadFile(dir + "/" + f)
@@ -115,6 +117,7 @@ func main() {
 
 	var data Data
 	data.Header = true
+	data.LimitTocLevel = true
 	inCover := false
 	inChapter := false
 	coverHTML := ""
@@ -156,6 +159,7 @@ func main() {
 					inChapter = false
 				}
 				toc = append(toc, TOCEntry{i, anchor, res[0][2]})
+				// fmt.Printf("TOC ENTRY %d | %s | %s\n", i, anchor, res[0][2])
 				titleAnchor++
 				continue
 			}
@@ -200,6 +204,12 @@ func main() {
 			continue
 		}
 
+		if comment == "!version" {
+			coverHTML += "</article>\n"
+			inCover = false
+			continue
+		}
+
 		if comment == "no-header" {
 			data.Header = false
 		}
@@ -217,8 +227,18 @@ func main() {
 			data.Cover = res[0][2]
 			inCover = true
 			coverHTML += "<article id='cover'>\n"
+		} else if res[0][1] == "version" {
+			inCover = true
+			coverHTML += "<article id='contents'>\n"
+			coverHTML += "<h2>" + res[0][2] + "</h2>\n"
 		} else if res[0][1] == "toc" {
 			tocName = res[0][2]
+			data.LimitTocLevel = true
+		} else if res[0][1] == "toch" {
+			tocName = res[0][2]
+			data.LimitTocLevel = false
+		} else {
+			fmt.Printf("UNKOWN '%s'\n", res[0][1])
 		}
 	}
 
@@ -227,25 +247,10 @@ func main() {
 		tocHTML += "<article id='contents'>\n"
 		tocHTML += "<h2>" + tocName + "</h2>\n"
 		level := 0
+		tmpStr := ""
 		for _, entry := range toc {
-			if entry.Level > 2 {
-				continue
-			}
-
-			if entry.Level > level {
-				tocHTML += "<ul>"
-				level = entry.Level
-			}
-			if entry.Level < level {
-				tocHTML += "</ul>"
-				level = entry.Level
-			}
-
-			if entry.Level == 0 {
-				tocHTML += "<h3>" + entry.Title + "</h3>\n"
-				continue
-			}
-			tocHTML += "<li><a href='#" + entry.Anchor + "'></a></li>\n"
+			level, tmpStr = TOCEntry_To_HTML(entry, level, data.LimitTocLevel)
+			tocHTML += tmpStr
 		}
 		tocHTML += "</article>"
 	}
@@ -254,7 +259,6 @@ func main() {
 	htmlOut = htmlOut + "{{define \"BUILD_DATETIME\"}}" + time.Now().Format(time.RFC3339) + " {{end}}\n"
 	htmlOut = htmlOut + "{{define \"BUILD_DATE\"}}" + time.Now().Format("2006-01-02") + " {{end}}\n"
 	htmlOut = htmlOut + "{{define \"BUILD_VERSION\"}} " + os.Getenv("BUILD_VERSION") + " {{end}}\n"
-
 
 	// Makdown HTML
 	f, _ := os.Create(dir + "/md-output.html")
@@ -284,4 +288,34 @@ func replaceImage(src, width, height, alt string) string {
 	}
 	str += "</div>"
 	return str
+}
+
+func TOCEntry_To_HTML(toc_entry TOCEntry, current_level int, limit_toc_level bool) (int, string) {
+	HTML_Result := ""
+
+	if (toc_entry.Level > 2 && limit_toc_level) || toc_entry.Level > 3 {
+		return current_level, HTML_Result
+	}
+
+	if toc_entry.Level > current_level {
+		HTML_Result += "<ul>"
+		current_level = toc_entry.Level
+	}
+	if toc_entry.Level < current_level {
+		HTML_Result += "</ul>"
+		current_level = toc_entry.Level
+	}
+
+	if toc_entry.Level == 0 {
+		HTML_Result += "<h3>" + toc_entry.Title + "</h3>\n"
+		return current_level, HTML_Result
+	}
+
+	if toc_entry.Level > 2 {
+		HTML_Result += "<li class='third_level'><a href='#" + toc_entry.Anchor + "'></a></li>\n"
+	} else {
+		HTML_Result += "<li><a href='#" + toc_entry.Anchor + "'></a></li>\n"
+	}
+
+	return current_level, HTML_Result
 }
